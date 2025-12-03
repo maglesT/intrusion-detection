@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pickle
 import json
+import os
 
 # Page config
 st.set_page_config(
@@ -11,7 +11,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# Load model version info
+# Load version info
 @st.cache_data
 def load_version_info():
     try:
@@ -20,21 +20,31 @@ def load_version_info():
     except:
         return {"versions": {"v1": {"accuracy": 0.7727, "date": "2025-12-03", "status": "production"}}}
 
-# Load model
+# Load model with error handling
 @st.cache_resource
 def load_model(version="v1"):
-    model_path = f"models/{version}/model.pkl"
-    scaler_path = f"models/{version}/scaler.pkl"
-    encoder_path = f"models/{version}/encoder.pkl"
+    try:
+        import pickle
+        
+        model_path = f"models/{version}/model.pkl"
+        scaler_path = f"models/{version}/scaler.pkl"
+        encoder_path = f"models/{version}/encoder.pkl"
+        
+        # Check if files exist
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model file not found: {model_path}")
+        
+        with open(model_path, 'rb') as f:
+            model = pickle.load(f)
+        with open(scaler_path, 'rb') as f:
+            scaler = pickle.load(f)
+        with open(encoder_path, 'rb') as f:
+            encoder = pickle.load(f)
+        
+        return model, scaler, encoder, None
     
-    with open(model_path, 'rb') as f:
-        model = pickle.load(f)
-    with open(scaler_path, 'rb') as f:
-        scaler = pickle.load(f)
-    with open(encoder_path, 'rb') as f:
-        encoder = pickle.load(f)
-    
-    return model, scaler, encoder
+    except Exception as e:
+        return None, None, None, str(e)
 
 # Main app
 st.title("🔒 Network Intrusion Detection System")
@@ -56,12 +66,34 @@ st.sidebar.metric("Accuracy", f"{version_data['accuracy']:.2%}")
 st.sidebar.caption(f"Status: {version_data['status']}")
 
 # Load model
-try:
-    model, scaler, encoder = load_model(selected_version)
-    st.sidebar.success("✅ Model loaded successfully")
-except Exception as e:
-    st.sidebar.error(f"❌ Error loading model: {str(e)}")
+model, scaler, encoder, error = load_model(selected_version)
+
+if error:
+    st.sidebar.error(f"❌ Error loading model: {error}")
+    
+    # Debug info
+    with st.expander("🔍 Debug Information"):
+        st.write("**Error Details:**")
+        st.code(error)
+        
+        st.write("**Checking file structure:**")
+        try:
+            if os.path.exists('models'):
+                st.success("✓ models/ folder exists")
+                if os.path.exists(f'models/{selected_version}'):
+                    st.success(f"✓ models/{selected_version}/ folder exists")
+                    files = os.listdir(f'models/{selected_version}')
+                    st.write(f"Files in models/{selected_version}/:", files)
+                else:
+                    st.error(f"✗ models/{selected_version}/ folder NOT found")
+            else:
+                st.error("✗ models/ folder NOT found")
+        except Exception as e:
+            st.error(f"Error checking files: {e}")
+    
     st.stop()
+else:
+    st.sidebar.success("✅ Model loaded successfully")
 
 # Tabs
 tab1, tab2, tab3 = st.tabs(["🎯 Single Prediction", "📁 Batch Prediction", "ℹ️ About"])
@@ -89,46 +121,50 @@ with tab1:
         same_srv_rate = st.slider("Same Service Rate", 0.0, 1.0, 1.0)
     
     if st.button("🔍 Detect Intrusion", type="primary"):
-        # Create feature vector (41 features)
-        features = np.array([[
-            duration, protocol_type, service, flag, src_bytes, dst_bytes,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            count, srv_count, 0.0, 0.0, 0.0, 0.0,
-            same_srv_rate, 0.0, 0.0, count, srv_count,
-            same_srv_rate, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0
-        ]])
-        
-        # Predict
-        features_scaled = scaler.transform(features)
-        prediction = model.predict(features_scaled)[0]
-        probabilities = model.predict_proba(features_scaled)[0]
-        
-        predicted_label = encoder.inverse_transform([prediction])[0]
-        confidence = float(np.max(probabilities))
-        
-        # Display result
-        st.markdown("---")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### 🎯 Detection Result")
-            if predicted_label == "Normal":
-                st.success(f"✅ **{predicted_label} Traffic**")
-            else:
-                st.error(f"⚠️ **{predicted_label} Attack Detected!**")
+        try:
+            # Create feature vector (41 features)
+            features = np.array([[
+                duration, protocol_type, service, flag, src_bytes, dst_bytes,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                count, srv_count, 0.0, 0.0, 0.0, 0.0,
+                same_srv_rate, 0.0, 0.0, count, srv_count,
+                same_srv_rate, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0
+            ]])
             
-            st.metric("Confidence", f"{confidence:.1%}")
-            st.progress(confidence)
-        
-        with col2:
-            st.markdown("### 📊 Probabilities")
-            prob_data = {encoder.classes_[i]: probabilities[i] for i in range(len(encoder.classes_))}
-            prob_df = pd.DataFrame(list(prob_data.items()), columns=['Type', 'Probability'])
-            prob_df = prob_df.sort_values('Probability', ascending=False)
+            # Predict
+            features_scaled = scaler.transform(features)
+            prediction = model.predict(features_scaled)[0]
+            probabilities = model.predict_proba(features_scaled)[0]
             
-            for idx, row in prob_df.iterrows():
-                st.write(f"**{row['Type']}**: {row['Probability']:.1%}")
-                st.progress(row['Probability'])
+            predicted_label = encoder.inverse_transform([prediction])[0]
+            confidence = float(np.max(probabilities))
+            
+            # Display result
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("### 🎯 Detection Result")
+                if predicted_label == "Normal":
+                    st.success(f"✅ **{predicted_label} Traffic**")
+                else:
+                    st.error(f"⚠️ **{predicted_label} Attack Detected!**")
+                
+                st.metric("Confidence", f"{confidence:.1%}")
+                st.progress(confidence)
+            
+            with col2:
+                st.markdown("### 📊 Probabilities")
+                prob_data = {encoder.classes_[i]: probabilities[i] for i in range(len(encoder.classes_))}
+                prob_df = pd.DataFrame(list(prob_data.items()), columns=['Type', 'Probability'])
+                prob_df = prob_df.sort_values('Probability', ascending=False)
+                
+                for idx, row in prob_df.iterrows():
+                    st.write(f"**{row['Type']}**: {row['Probability']:.1%}")
+                    st.progress(row['Probability'])
+        
+        except Exception as e:
+            st.error(f"Prediction error: {str(e)}")
 
 # Tab 2: Batch Prediction
 with tab2:
@@ -202,7 +238,7 @@ with tab2:
 with tab3:
     st.header("About This System")
     
-    st.markdown("""
+    st.markdown(f"""
     ## 🔒 Network Intrusion Detection System
     
     This system uses **XGBoost machine learning** to detect 5 types of network attacks:
@@ -225,11 +261,15 @@ with tab3:
     Dayananda Sagar University, Bangalore, India
     
     ### 📊 Model Info
-    - **Accuracy**: {:.2%}
-    - **Version**: {}
-    - **Status**: {}
-    """.format(version_data['accuracy'], selected_version, version_data['status']))
+    - **Accuracy**: {version_data['accuracy']:.2%}
+    - **Version**: {selected_version}
+    - **Status**: {version_data['status']}
+    
+    ### 🔗 Links
+    - **GitHub**: [maglesT/intrusion-detection](https://github.com/maglesT/intrusion-detection)
+    - **Dataset**: NSL-KDD
+    """)
 
 # Footer
 st.markdown("---")
-st.caption("🔒 Network IDS | Built with Streamlit & XGBoost")
+st.caption("🔒 Network IDS | Built with Streamlit & XGBoost | MLOps Project")
