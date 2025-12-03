@@ -1,0 +1,10 @@
+{
+  "versions": {
+    "v1": {
+      "accuracy": 0.7727,
+      "date": "2025-12-03",
+      "status": "production",
+      "description": "Initial XGBoost model with 77.27% accuracy"
+    }
+  }
+}
